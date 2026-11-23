@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Симулятор капитала и LTV (Долг / Портфель)</title>
+  <title>Симулятор капитала, LTV и динамического плеча</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
@@ -20,7 +20,7 @@
     }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { margin: 0; background: var(--bg); color: var(--text); padding: 24px; }
-    .container { max-width: 1220px; margin: 0 auto; }
+    .container { max-width: 1240px; margin: 0 auto; }
     .top-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
     h1 { margin: 0 0 4px; font-size: 24px; }
     .subtitle { color: var(--muted); margin: 0; font-size: 14px; }
@@ -55,10 +55,7 @@
       border: 1px solid transparent;
       transition: 0.15s;
     }
-    .control.locked {
-      background: #fffbeb;
-      border-color: #fde68a;
-    }
+    .control.locked { background: #fffbeb; border-color: #fde68a; }
     .control-header {
       display: flex;
       justify-content: space-between;
@@ -76,11 +73,7 @@
       font-size: 12px;
       cursor: pointer;
     }
-    .control.locked .lock-btn {
-      background: var(--amber);
-      color: #fff;
-      border-color: var(--amber);
-    }
+    .control.locked .lock-btn { background: var(--amber); color: #fff; border-color: var(--amber); }
     .val { color: var(--blue); }
     .control input[type="range"] { width: 100%; cursor: pointer; }
     .control input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -108,16 +101,15 @@
     .neg { color: var(--red); }
     .warn { color: var(--amber); }
 
-    .chart-box { position: relative; height: 310px; }
-    .chart-box-wide { position: relative; height: 340px; }
+    .chart-box { position: relative; height: 300px; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="top-bar">
       <div>
-        <h1>Симулятор капитала и LTV (Долг / Портфель)</h1>
-        <p class="subtitle">Фиксируйте параметры кнопкой 🔒, а при зафиксированном целевом LTV двигайте траты или доход</p>
+        <h1>Симулятор капитала, LTV и динамического плеча</h1>
+        <p class="subtitle">Плечо включается только когда LTV ниже целевого, и сбрасывается в 0% при превышении цели</p>
       </div>
       <div>
         <button class="btn" id="lockMarketBtn" onclick="toggleMarketPreset()">🔒 Зафиксировать ставку, рост и горизонт</button>
@@ -128,17 +120,17 @@
       <div class="control" id="box-initial">
         <div class="control-header">
           <span>Стартовый портфель</span>
-          <span><span class="val" id="initialVal">€350 000</span> <button class="lock-btn" data-lock="initial">🔓</button></span>
+          <span><span class="val" id="initialVal">€300 000</span> <button class="lock-btn" data-lock="initial">🔓</button></span>
         </div>
-        <input type="range" id="initial" min="100000" max="1000000" step="25000" value="200000" />
+        <input type="range" id="initial" min="100000" max="1000000" step="25000" value="300000" />
       </div>
 
       <div class="control" id="box-income">
         <div class="control-header">
           <span>Ежемесячный доход (в портфель)</span>
-          <span><span class="val" id="incomeVal">€7 000</span> <button class="lock-btn" data-lock="income">🔓</button></span>
+          <span><span class="val" id="incomeVal">€12 000</span> <button class="lock-btn" data-lock="income">🔓</button></span>
         </div>
-        <input type="range" id="income" min="1000" max="30000" step="250" value="8000" />
+        <input type="range" id="income" min="1000" max="30000" step="250" value="12000" />
       </div>
 
       <div class="control" id="box-spend">
@@ -147,6 +139,22 @@
           <span><span class="val" id="spendVal">€4 000</span> <button class="lock-btn" data-lock="spend">🔓</button></span>
         </div>
         <input type="range" id="spend" min="500" max="15000" step="250" value="4000" />
+      </div>
+
+      <div class="control" id="box-targetLtv">
+        <div class="control-header">
+          <span>Целевой LTV (Долг / Портфель)</span>
+          <span><span class="val" id="targetLtvVal">15.0%</span> <button class="lock-btn" id="lockLtvBtn" onclick="toggleLtvLock()">🔓</button></span>
+        </div>
+        <input type="range" id="targetLtv" min="2" max="50" step="0.5" value="15" />
+      </div>
+
+      <div class="control" id="box-maxStepLev">
+        <div class="control-header">
+          <span>Лимит плеча за шаг (% портфеля)</span>
+          <span><span class="val" id="maxStepLevVal">15.0%</span> <button class="lock-btn" data-lock="maxStepLev">🔓</button></span>
+        </div>
+        <input type="range" id="maxStepLev" min="0" max="10" step="1" value="5" />
       </div>
 
       <div class="control" id="box-growth">
@@ -172,21 +180,13 @@
         </div>
         <input type="range" id="years" min="5" max="30" step="1" value="20" />
       </div>
-
-      <div class="control" id="box-targetLtv">
-        <div class="control-header">
-          <span>Целевой LTV (Долг / Портфель)</span>
-          <span><span class="val" id="targetLtvVal">15.0%</span> <button class="lock-btn" id="lockLtvBtn" onclick="toggleLtvLock()">🔓</button></span>
-        </div>
-        <input type="range" id="targetLtv" min="2" max="60" step="0.5" value="15" />
-      </div>
     </div>
 
     <div class="grid-2">
       <!-- График 1 -->
       <div class="card">
-        <h2>1. Весь доход в акции, жизнь в кредит</h2>
-        <p class="desc">Портфель, чистый капитал и накопленный долг с процентами</p>
+        <h2>1. Капитал и долг с динамическим плечом</h2>
+        <p class="desc">Весь доход в акции, траты в кредит, плечо добирается только до целевого LTV</p>
         <div class="kpis-4">
           <div class="kpi">
             <div class="k-label">Портфель в конце</div>
@@ -211,7 +211,7 @@
       <!-- График 2 -->
       <div class="card">
         <h2>2. Жизнь на доход, в портфель — остаток</h2>
-        <p class="desc">Без кредита: в портфель ежемесячно идет только (доход − траты)</p>
+        <p class="desc">Без кредита и плеча: в портфель ежемесячно идет только (доход − траты)</p>
         <div class="kpis-3">
           <div class="kpi">
             <div class="k-label">Остаток в мес.</div>
@@ -228,13 +228,20 @@
         </div>
         <div class="chart-box"><canvas id="stdChart"></canvas></div>
       </div>
-    </div>
 
-    <!-- График 3: Отдельный график только для % долга от капитала -->
-    <div class="card">
-      <h2>3. Динамика процента долга от капитала (LTV %)</h2>
-      <p class="desc">Показывает долю долга в портфеле по годам. При зафиксированном LTV двигайте траты или доход — зависимость пересчитается автоматически.</p>
-      <div class="chart-box-wide"><canvas id="ltvChart"></canvas></div>
+      <!-- График 3 -->
+      <div class="card">
+        <h2>3. Процент долга от капитала (LTV %)</h2>
+        <p class="desc">Фактическая доля долга в портфеле по годам</p>
+        <div class="chart-box"><canvas id="ltvChart"></canvas></div>
+      </div>
+
+      <!-- График 4 -->
+      <div class="card">
+        <h2>4. Использование плеча по годам (% портфеля)</h2>
+        <p class="desc">Показывает, когда плечо включалось для достижения целевого LTV, а когда было 0%</p>
+        <div class="chart-box"><canvas id="levChart"></canvas></div>
+      </div>
     </div>
   </div>
 
@@ -242,8 +249,8 @@
     const fmtEur = (n) => "€" + Math.round(n).toLocaleString("ru-RU");
     const fmtPct = (n) => Number(n).toFixed(1) + "%";
 
-    const paramKeys = ["initial", "income", "spend", "growth", "rate", "years"];
-    const locked = { initial: false, income: false, spend: false, growth: false, rate: false, years: false };
+    const paramKeys = ["initial", "income", "spend", "maxStepLev", "growth", "rate", "years"];
+    const locked = { initial: false, income: false, spend: false, maxStepLev: false, growth: false, rate: false, years: false };
     let ltvLocked = false;
     let lastSolvedBy = "spend_moved";
 
@@ -296,10 +303,11 @@
       document.getElementById("initialVal").textContent = fmtEur(document.getElementById("initial").value);
       document.getElementById("incomeVal").textContent = fmtEur(document.getElementById("income").value);
       document.getElementById("spendVal").textContent = fmtEur(document.getElementById("spend").value);
+      document.getElementById("targetLtvVal").textContent = Number(document.getElementById("targetLtv").value).toFixed(1) + "%";
+      document.getElementById("maxStepLevVal").textContent = Number(document.getElementById("maxStepLev").value).toFixed(1) + "%";
       document.getElementById("growthVal").textContent = Number(document.getElementById("growth").value).toFixed(1) + "%";
       document.getElementById("rateVal").textContent = Number(document.getElementById("rate").value).toFixed(1) + "%";
       document.getElementById("yearsVal").textContent = document.getElementById("years").value + " лет";
-      document.getElementById("targetLtvVal").textContent = Number(document.getElementById("targetLtv").value).toFixed(1) + "%";
     }
 
     const bbdChart = new Chart(document.getElementById("bbdChart"), {
@@ -309,7 +317,7 @@
         datasets: [
           { label: "Размер портфеля", data: [], borderColor: "#2563eb", tension: 0.25 },
           { label: "Чистый капитал", data: [], borderColor: "#16a34a", backgroundColor: "rgba(22,163,74,0.12)", fill: true, tension: 0.25 },
-          { label: "Накопленный долг", data: [], borderColor: "#dc2626", borderDash: [5, 5], tension: 0.25 }
+          { label: "Суммарный долг", data: [], borderColor: "#dc2626", borderDash: [5, 5], tension: 0.25 }
         ]
       },
       options: {
@@ -341,15 +349,7 @@
       data: {
         labels: [],
         datasets: [
-          {
-            label: "Долг / Портфель (LTV %)",
-            data: [],
-            borderColor: "#d97706",
-            backgroundColor: "rgba(217,119,6,0.14)",
-            fill: true,
-            borderWidth: 2.5,
-            tension: 0.25
-          }
+          { label: "Долг / Портфель (LTV %)", data: [], borderColor: "#d97706", backgroundColor: "rgba(217,119,6,0.14)", fill: true, borderWidth: 2.5, tension: 0.25 }
         ]
       },
       options: {
@@ -361,17 +361,35 @@
       }
     });
 
+    const levChart = new Chart(document.getElementById("levChart"), {
+      type: "bar",
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Добавленное плечо (% от портфеля)", data: [], backgroundColor: "rgba(37, 99, 235, 0.75)", borderColor: "#2563eb", borderWidth: 1 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtPct(ctx.parsed.y)}` } } },
+        scales: { y: { beginAtZero: true, ticks: { callback: (v) => Number(v).toFixed(0) + "%" } } }
+      }
+    });
+
     async function refreshSimulation(solvedBy = lastSolvedBy) {
       lastSolvedBy = solvedBy;
       const payload = {
         initial: Number(document.getElementById("initial").value),
         income: Number(document.getElementById("income").value),
         spend: Number(document.getElementById("spend").value),
+        targetLtv: Number(document.getElementById("targetLtv").value),
+        maxStepLev: Number(document.getElementById("maxStepLev").value),
         growth: Number(document.getElementById("growth").value),
         rate: Number(document.getElementById("rate").value),
         years: Number(document.getElementById("years").value),
         ltvLocked,
-        targetLtv: Number(document.getElementById("targetLtv").value),
         solvedBy
       };
 
@@ -388,7 +406,7 @@
         document.getElementById("income").value = clampedIncome;
         document.getElementById("spend").value = clampedSpend;
         if (!ltvLocked) {
-          const clampedLtv = Math.min(60, Math.max(2, data.resolvedParams.targetLtv));
+          const clampedLtv = Math.min(50, Math.max(2, data.resolvedParams.targetLtv));
           document.getElementById("targetLtv").value = clampedLtv;
         }
       }
@@ -409,6 +427,10 @@
       ltvChart.data.datasets[0].data = data.bbd.ltvPct;
       ltvChart.update();
 
+      levChart.data.labels = data.labels;
+      levChart.data.datasets[0].data = data.bbd.levUsagePct;
+      levChart.update();
+
       document.getElementById("bbdPortfolioKpi").textContent = fmtEur(data.bbd.finalPortfolio);
       document.getElementById("bbdDebtKpi").textContent = fmtEur(data.bbd.finalDebt);
       document.getElementById("bbdNetKpi").textContent = fmtEur(data.bbd.finalNetWorth);
@@ -425,7 +447,7 @@
 
     document.getElementById("spend").addEventListener("input", () => refreshSimulation("spend_moved"));
     document.getElementById("income").addEventListener("input", () => refreshSimulation("income_moved"));
-    ["initial", "growth", "rate", "years", "targetLtv"].forEach((id) => {
+    ["initial", "targetLtv", "maxStepLev", "growth", "rate", "years"].forEach((id) => {
       document.getElementById(id).addEventListener("input", () => refreshSimulation("spend_moved"));
     });
 

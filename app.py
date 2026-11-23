@@ -3,26 +3,33 @@ from flask import Flask, render_template, request, jsonify
 app = Flask(__name__)
 
 
-def simulate_step(
+def simulate_with_dynamic_leverage(
     initial: float,
     income: float,
     spend: float,
     growth_pct: float,
     rate_pct: float,
     years: int,
+    target_ltv_pct: float,
+    max_step_lev_pct: float = 15.0,
 ):
     months = max(1, int(years) * 12)
     r_month = (growth_pct / 100.0) / 12.0
     loan_month = (rate_pct / 100.0) / 12.0
+    target_ratio = max(0.0, target_ltv_pct) / 100.0
+    max_step_ratio = max(0.0, max_step_lev_pct) / 100.0
 
     labels = []
 
     bbd_portfolio = float(initial)
     bbd_debt = 0.0
+    current_lev_pct = 0.0
+
     bbd_portfolio_series = []
     bbd_debt_series = []
     bbd_net_worth_series = []
     bbd_ltv_series = []
+    lev_usage_series = []
 
     std_portfolio = float(initial)
     std_portfolio_series = []
@@ -35,16 +42,28 @@ def simulate_step(
             bbd_debt_series.append(round(bbd_debt, 2))
             bbd_net_worth_series.append(round(bbd_portfolio - bbd_debt, 2))
             bbd_ltv_series.append(round(ltv_pct, 2))
+            lev_usage_series.append(round(current_lev_pct, 2))
             std_portfolio_series.append(round(std_portfolio, 2))
 
         if m < months:
-            bbd_portfolio = bbd_portfolio * (1.0 + r_month) + income
-            bbd_debt = (bbd_debt + spend) * (1.0 + loan_month)
+            # Начало месяца: оцениваем LTV и при необходимости берем плечо на докупку акций
+            # Формула макс. доп. займа x до целевого LTV: (debt + x) / (portfolio + x) = target_ratio
+            # => x = (target_ratio * portfolio - debt) / (1 - target_ratio)
+            added_leverage = 0.0
+            if target_ratio < 0.95 and bbd_portfolio > 0:
+                max_allowed_borrow = (target_ratio * bbd_portfolio - bbd_debt) / (1.0 - target_ratio)
+                step_cap = bbd_portfolio * max_step_ratio
+                if max_allowed_borrow > 0:
+                    added_leverage = min(max_allowed_borrow, step_cap)
+
+            current_lev_pct = (added_leverage / bbd_portfolio * 100.0) if bbd_portfolio > 0 else 0.0
+
+            # Добавляем доп. плечо в портфель и в долг, затем прибавляем доход и траты на жизнь
+            bbd_portfolio = (bbd_portfolio + added_leverage) * (1.0 + r_month) + income
+            bbd_debt = (bbd_debt + added_leverage + spend) * (1.0 + loan_month)
 
             net_contribution = max(0.0, income - spend)
             std_portfolio = std_portfolio * (1.0 + r_month) + net_contribution
-
-    final_ltv = bbd_ltv_series[-1]
 
     return {
         "labels": labels,
@@ -53,10 +72,12 @@ def simulate_step(
             "debt": bbd_debt_series,
             "netWorth": bbd_net_worth_series,
             "ltvPct": bbd_ltv_series,
+            "levUsagePct": lev_usage_series,
             "finalPortfolio": bbd_portfolio_series[-1],
             "finalDebt": bbd_debt_series[-1],
             "finalNetWorth": bbd_net_worth_series[-1],
-            "finalLtvPct": final_ltv,
+            "finalLtvPct": bbd_ltv_series[-1],
+            "finalLevUsagePct": lev_usage_series[-1],
         },
         "standard": {
             "portfolio": std_portfolio_series,
@@ -65,36 +86,23 @@ def simulate_step(
     }
 
 
-def project_portfolio_only(initial: float, income: float, growth_pct: float, years: int) -> float:
-    months = max(1, int(years) * 12)
-    r_month = (growth_pct / 100.0) / 12.0
-    p = float(initial)
-    for _ in range(months):
-        p = p * (1.0 + r_month) + income
-    return p
-
-
-def project_debt_only(spend: float, rate_pct: float, years: int) -> float:
-    months = max(1, int(years) * 12)
-    loan_month = (rate_pct / 100.0) / 12.0
-    d = 0.0
-    for _ in range(months):
-        d = (d + spend) * (1.0 + loan_month)
-    return d
-
-
 def solve_income_for_target_ltv(
-    initial: float, spend: float, growth_pct: float, rate_pct: float, years: int, target_ltv_pct: float
+    initial: float,
+    spend: float,
+    growth_pct: float,
+    rate_pct: float,
+    years: int,
+    target_ltv_pct: float,
+    max_step_lev_pct: float,
 ) -> float:
-    target_debt = project_debt_only(spend, rate_pct, years)
-    target_ratio = max(0.001, target_ltv_pct / 100.0)
-    required_portfolio = target_debt / target_ratio
-
-    # Бинарный поиск нужного ежемесячного дохода в портфель
-    lo, hi = 0.0, 200000.0
+    lo, hi = 0.0, 250000.0
     for _ in range(60):
         mid = (lo + hi) / 2.0
-        if project_portfolio_only(initial, mid, growth_pct, years) < required_portfolio:
+        sim = simulate_with_dynamic_leverage(
+            initial, mid, spend, growth_pct, rate_pct, years, target_ltv_pct, max_step_lev_pct
+        )
+        # При большем доходе портфель больше -> LTV ниже
+        if sim["bbd"]["finalLtvPct"] > target_ltv_pct:
             lo = mid
         else:
             hi = mid
@@ -102,16 +110,22 @@ def solve_income_for_target_ltv(
 
 
 def solve_spend_for_target_ltv(
-    initial: float, income: float, growth_pct: float, rate_pct: float, years: int, target_ltv_pct: float
+    initial: float,
+    income: float,
+    growth_pct: float,
+    rate_pct: float,
+    years: int,
+    target_ltv_pct: float,
+    max_step_lev_pct: float,
 ) -> float:
-    portfolio = project_portfolio_only(initial, income, growth_pct, years)
-    max_debt = portfolio * (max(0.0, target_ltv_pct) / 100.0)
-
-    # Бинарный поиск допустимых ежемесячных трат
     lo, hi = 0.0, 100000.0
     for _ in range(60):
         mid = (lo + hi) / 2.0
-        if project_debt_only(mid, rate_pct, years) <= max_debt:
+        sim = simulate_with_dynamic_leverage(
+            initial, income, mid, growth_pct, rate_pct, years, target_ltv_pct, max_step_lev_pct
+        )
+        # При меньших тратах долг меньше -> LTV ниже
+        if sim["bbd"]["finalLtvPct"] <= target_ltv_pct:
             lo = mid
         else:
             hi = mid
@@ -126,24 +140,25 @@ def index():
 @app.route("/api/simulate", methods=["POST"])
 def api_simulate():
     data = request.get_json(force=True)
-    initial = float(data.get("initial", 200000))
-    income = float(data.get("income", 8000))
+    initial = float(data.get("initial", 300000))
+    income = float(data.get("income", 12000))
     spend = float(data.get("spend", 4000))
     growth = float(data.get("growth", 8.0))
     rate = float(data.get("rate", 4.0))
     years = int(data.get("years", 20))
+    target_ltv = float(data.get("targetLtv", 15.0))
+    max_step_lev = float(data.get("maxStepLev", 15.0))
 
     ltv_locked = bool(data.get("ltvLocked", False))
-    target_ltv = float(data.get("targetLtv", 15.0))
-    solved_by = data.get("solvedBy")  # "spend_moved" или "income_moved"
+    solved_by = data.get("solvedBy")
 
     if ltv_locked:
         if solved_by == "income_moved":
-            spend = solve_spend_for_target_ltv(initial, income, growth, rate, years, target_ltv)
+            spend = solve_spend_for_target_ltv(initial, income, growth, rate, years, target_ltv, max_step_lev)
         else:
-            income = solve_income_for_target_ltv(initial, spend, growth, rate, years, target_ltv)
+            income = solve_income_for_target_ltv(initial, spend, growth, rate, years, target_ltv, max_step_lev)
 
-    sim = simulate_step(initial, income, spend, growth, rate, years)
+    sim = simulate_with_dynamic_leverage(initial, income, spend, growth, rate, years, target_ltv, max_step_lev)
     sim["resolvedParams"] = {
         "initial": initial,
         "income": income,
@@ -151,6 +166,7 @@ def api_simulate():
         "growth": growth,
         "rate": rate,
         "years": years,
+        "maxStepLev": max_step_lev,
         "targetLtv": round(sim["bbd"]["finalLtvPct"], 2) if not ltv_locked else target_ltv,
     }
     return jsonify(sim)
