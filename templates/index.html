@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Симуляция капитала: Buy, Borrow, Die vs Обычный подход</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --text: #141821;
+      --muted: #5c6578;
+      --border: #e3e8f0;
+      --blue: #2563eb;
+      --green: #16a34a;
+      --red: #dc2626;
+      --purple: #7c3aed;
+      --amber: #d97706;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; background: var(--bg); color: var(--text); padding: 24px; }
+    .container { max-width: 1180px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .subtitle { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+
+    .controls {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+      margin-bottom: 24px;
+    }
+    .control label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .control span.val { color: var(--blue); }
+    .control input[type="range"] { width: 100%; cursor: pointer; }
+
+    .grid-2 { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; }
+    @media (max-width: 960px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+    }
+    .card h2 { margin: 0 0 6px; font-size: 18px; }
+    .card p.desc { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+
+    .kpis-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+    .kpis-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+    @media (max-width: 640px) { .kpis-4, .kpis-3 { grid-template-columns: repeat(2, 1fr); } }
+
+    .kpi { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+    .kpi .k-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .kpi .k-val { font-size: 15px; font-weight: 700; }
+    .pos { color: var(--green); }
+    .neg { color: var(--red); }
+    .warn { color: var(--amber); }
+
+    .chart-box { position: relative; height: 330px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Симулятор стратегий накопления капитала</h1>
+    <p class="subtitle">Сравнение модели «весь доход в акции, жизнь в кредит» и классического инвестирования остатка</p>
+
+    <div class="controls">
+      <div class="control">
+        <label><span>Стартовый портфель</span><span class="val" id="initialVal">€350 000</span></label>
+        <input type="range" id="initial" min="100000" max="1000000" step="25000" value="350000" />
+      </div>
+      <div class="control">
+        <label><span>Ежемесячный доход</span><span class="val" id="incomeVal">€7 000</span></label>
+        <input type="range" id="income" min="2000" max="20000" step="500" value="7000" />
+      </div>
+      <div class="control">
+        <label><span>Ежемесячные траты</span><span class="val" id="spendVal">€4 000</span></label>
+        <input type="range" id="spend" min="1000" max="10000" step="250" value="4000" />
+      </div>
+      <div class="control">
+        <label><span>Рост портфеля (% год)</span><span class="val" id="growthVal">8.0%</span></label>
+        <input type="range" id="growth" min="2" max="15" step="0.5" value="8" />
+      </div>
+      <div class="control">
+        <label><span>Ставка кредита (% год)</span><span class="val" id="rateVal">4.0%</span></label>
+        <input type="range" id="rate" min="1" max="10" step="0.5" value="4" />
+      </div>
+      <div class="control">
+        <label><span>Горизонт (лет)</span><span class="val" id="yearsVal">15 лет</span></label>
+        <input type="range" id="years" min="5" max="30" step="1" value="15" />
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- График 1: Buy, Borrow, Die + % долга от портфеля -->
+      <div class="card">
+        <h2>1. Весь доход в акции, жизнь в кредит</h2>
+        <p class="desc">Показаны суммы в евро и доля долга в портфеле (LTV, правая ось)</p>
+        <div class="kpis-4">
+          <div class="kpi">
+            <div class="k-label">Портфель в конце</div>
+            <div class="k-val" id="bbdPortfolioKpi">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Долг с процентами</div>
+            <div class="k-val neg" id="bbdDebtKpi">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Чистый капитал</div>
+            <div class="k-val pos" id="bbdNetKpi">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Долг / Портфель</div>
+            <div class="k-val warn" id="bbdLtvKpi">—</div>
+          </div>
+        </div>
+        <div class="chart-box"><canvas id="bbdChart"></canvas></div>
+      </div>
+
+      <!-- График 2: Обычное инвестирование остатка -->
+      <div class="card">
+        <h2>2. Жизнь на доход, в портфель — остаток</h2>
+        <p class="desc">Без кредита: в портфель ежемесячно идет только (доход − траты)</p>
+        <div class="kpis-3">
+          <div class="kpi">
+            <div class="k-label">Остаток в мес.</div>
+            <div class="k-val" id="stdSurplusKpi">—</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Долг</div>
+            <div class="k-val">€0</div>
+          </div>
+          <div class="kpi">
+            <div class="k-label">Чистый капитал</div>
+            <div class="k-val pos" id="stdNetKpi">—</div>
+          </div>
+        </div>
+        <div class="chart-box"><canvas id="stdChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const fmtEur = (n) => "€" + Math.round(n).toLocaleString("ru-RU");
+    const fmtPct = (n) => Number(n).toFixed(1) + "%";
+
+    const inputs = ["initial", "income", "spend", "growth", "rate", "years"].map((id) => document.getElementById(id));
+
+    function updateLabels() {
+      document.getElementById("initialVal").textContent = fmtEur(document.getElementById("initial").value);
+      document.getElementById("incomeVal").textContent = fmtEur(document.getElementById("income").value);
+      document.getElementById("spendVal").textContent = fmtEur(document.getElementById("spend").value);
+      document.getElementById("growthVal").textContent = Number(document.getElementById("growth").value).toFixed(1) + "%";
+      document.getElementById("rateVal").textContent = Number(document.getElementById("rate").value).toFixed(1) + "%";
+      document.getElementById("yearsVal").textContent = document.getElementById("years").value + " лет";
+    }
+
+    const bbdChart = new Chart(document.getElementById("bbdChart"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Размер портфеля",
+            data: [],
+            borderColor: "#2563eb",
+            backgroundColor: "rgba(37,99,235,0.08)",
+            yAxisID: "yEur",
+            tension: 0.25
+          },
+          {
+            label: "Чистый капитал (активы − долг)",
+            data: [],
+            borderColor: "#16a34a",
+            backgroundColor: "rgba(22,163,74,0.12)",
+            fill: true,
+            yAxisID: "yEur",
+            tension: 0.25
+          },
+          {
+            label: "Накопленный долг",
+            data: [],
+            borderColor: "#dc2626",
+            borderDash: [5, 5],
+            yAxisID: "yEur",
+            tension: 0.25
+          },
+          {
+            label: "Долг от портфеля (%)",
+            data: [],
+            borderColor: "#d97706",
+            backgroundColor: "rgba(217,119,6,0.08)",
+            borderWidth: 2,
+            pointRadius: 3,
+            yAxisID: "yPct",
+            tension: 0.25
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                if (ctx.dataset.yAxisID === "yPct") {
+                  return `${ctx.dataset.label}: ${fmtPct(ctx.parsed.y)}`;
+                }
+                return `${ctx.dataset.label}: ${fmtEur(ctx.parsed.y)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          yEur: {
+            type: "linear",
+            position: "left",
+            ticks: { callback: (v) => "€" + Math.round(v / 1000) + "k" }
+          },
+          yPct: {
+            type: "linear",
+            position: "right",
+            grid: { drawOnChartArea: false },
+            ticks: { callback: (v) => Number(v).toFixed(0) + "%" }
+          }
+        }
+      }
+    });
+
+    const stdChart = new Chart(document.getElementById("stdChart"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Портфель (инвестируется только остаток)",
+            data: [],
+            borderColor: "#7c3aed",
+            backgroundColor: "rgba(124,58,237,0.12)",
+            fill: true,
+            tension: 0.25
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtEur(ctx.parsed.y)}` } } },
+        scales: { y: { ticks: { callback: (v) => "€" + Math.round(v / 1000) + "k" } } }
+      }
+    });
+
+    async function refreshSimulation() {
+      updateLabels();
+      const payload = {
+        initial: Number(document.getElementById("initial").value),
+        income: Number(document.getElementById("income").value),
+        spend: Number(document.getElementById("spend").value),
+        growth: Number(document.getElementById("growth").value),
+        rate: Number(document.getElementById("rate").value),
+        years: Number(document.getElementById("years").value)
+      };
+
+      const res = await fetch("/api/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+
+      bbdChart.data.labels = data.labels;
+      bbdChart.data.datasets[0].data = data.bbd.portfolio;
+      bbdChart.data.datasets[1].data = data.bbd.netWorth;
+      bbdChart.data.datasets[2].data = data.bbd.debt;
+      bbdChart.data.datasets[3].data = data.bbd.ltvPct;
+      bbdChart.update();
+
+      stdChart.data.labels = data.labels;
+      stdChart.data.datasets[0].data = data.standard.portfolio;
+      stdChart.update();
+
+      document.getElementById("bbdPortfolioKpi").textContent = fmtEur(data.bbd.finalPortfolio);
+      document.getElementById("bbdDebtKpi").textContent = fmtEur(data.bbd.finalDebt);
+      document.getElementById("bbdNetKpi").textContent = fmtEur(data.bbd.finalNetWorth);
+
+      const ltvEl = document.getElementById("bbdLtvKpi");
+      ltvEl.textContent = fmtPct(data.bbd.finalLtvPct);
+      ltvEl.className = "k-val " + (data.bbd.finalLtvPct > 25 ? "neg" : data.bbd.finalLtvPct > 15 ? "warn" : "pos");
+
+      const surplus = Math.max(0, payload.income - payload.spend);
+      document.getElementById("stdSurplusKpi").textContent = fmtEur(surplus);
+      document.getElementById("stdNetKpi").textContent = fmtEur(data.standard.finalPortfolio);
+    }
+
+    inputs.forEach((el) => el.addEventListener("input", refreshSimulation));
+    refreshSimulation();
+  </script>
+</body>
+</html>
