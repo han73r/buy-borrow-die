@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Симуляция капитала: Buy, Borrow, Die vs Обычный подход</title>
+  <title>Симулятор капитала и LTV (Долг / Портфель)</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
@@ -20,9 +20,24 @@
     }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { margin: 0; background: var(--bg); color: var(--text); padding: 24px; }
-    .container { max-width: 1180px; margin: 0 auto; }
-    h1 { margin: 0 0 8px; font-size: 24px; }
-    .subtitle { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+    .container { max-width: 1220px; margin: 0 auto; }
+    .top-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    .subtitle { color: var(--muted); margin: 0; font-size: 14px; }
+
+    .btn {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: 0.15s;
+    }
+    .btn:hover { background: #f1f5f9; }
+    .btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 
     .controls {
       background: var(--card);
@@ -30,15 +45,47 @@
       border-radius: 14px;
       padding: 20px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 18px;
       margin-bottom: 24px;
     }
-    .control label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-    .control span.val { color: var(--blue); }
+    .control {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      transition: 0.15s;
+    }
+    .control.locked {
+      background: #fffbeb;
+      border-color: #fde68a;
+    }
+    .control-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .lock-btn {
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 6px;
+      padding: 2px 7px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .control.locked .lock-btn {
+      background: var(--amber);
+      color: #fff;
+      border-color: var(--amber);
+    }
+    .val { color: var(--blue); }
     .control input[type="range"] { width: 100%; cursor: pointer; }
+    .control input[type="range"]:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    .grid-2 { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
     @media (max-width: 960px) { .grid-2 { grid-template-columns: 1fr; } }
 
     .card {
@@ -61,46 +108,85 @@
     .neg { color: var(--red); }
     .warn { color: var(--amber); }
 
-    .chart-box { position: relative; height: 330px; }
+    .chart-box { position: relative; height: 310px; }
+    .chart-box-wide { position: relative; height: 340px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Симулятор стратегий накопления капитала</h1>
-    <p class="subtitle">Сравнение модели «весь доход в акции, жизнь в кредит» и классического инвестирования остатка</p>
+    <div class="top-bar">
+      <div>
+        <h1>Симулятор капитала и LTV (Долг / Портфель)</h1>
+        <p class="subtitle">Фиксируйте параметры кнопкой 🔒, а при зафиксированном целевом LTV двигайте траты или доход</p>
+      </div>
+      <div>
+        <button class="btn" id="lockMarketBtn" onclick="toggleMarketPreset()">🔒 Зафиксировать ставку, рост и горизонт</button>
+      </div>
+    </div>
 
     <div class="controls">
-      <div class="control">
-        <label><span>Стартовый портфель</span><span class="val" id="initialVal">€350 000</span></label>
-        <input type="range" id="initial" min="100000" max="1000000" step="25000" value="350000" />
+      <div class="control" id="box-initial">
+        <div class="control-header">
+          <span>Стартовый портфель</span>
+          <span><span class="val" id="initialVal">€350 000</span> <button class="lock-btn" data-lock="initial">🔓</button></span>
+        </div>
+        <input type="range" id="initial" min="100000" max="1000000" step="25000" value="200000" />
       </div>
-      <div class="control">
-        <label><span>Ежемесячный доход</span><span class="val" id="incomeVal">€7 000</span></label>
-        <input type="range" id="income" min="2000" max="20000" step="500" value="7000" />
+
+      <div class="control" id="box-income">
+        <div class="control-header">
+          <span>Ежемесячный доход (в портфель)</span>
+          <span><span class="val" id="incomeVal">€7 000</span> <button class="lock-btn" data-lock="income">🔓</button></span>
+        </div>
+        <input type="range" id="income" min="1000" max="30000" step="250" value="8000" />
       </div>
-      <div class="control">
-        <label><span>Ежемесячные траты</span><span class="val" id="spendVal">€4 000</span></label>
-        <input type="range" id="spend" min="1000" max="10000" step="250" value="4000" />
+
+      <div class="control" id="box-spend">
+        <div class="control-header">
+          <span>Ежемесячные траты (в кредит)</span>
+          <span><span class="val" id="spendVal">€4 000</span> <button class="lock-btn" data-lock="spend">🔓</button></span>
+        </div>
+        <input type="range" id="spend" min="500" max="15000" step="250" value="4000" />
       </div>
-      <div class="control">
-        <label><span>Рост портфеля (% год)</span><span class="val" id="growthVal">8.0%</span></label>
+
+      <div class="control" id="box-growth">
+        <div class="control-header">
+          <span>Рост портфеля (% год)</span>
+          <span><span class="val" id="growthVal">8.0%</span> <button class="lock-btn" data-lock="growth">🔓</button></span>
+        </div>
         <input type="range" id="growth" min="2" max="15" step="0.5" value="8" />
       </div>
-      <div class="control">
-        <label><span>Ставка кредита (% год)</span><span class="val" id="rateVal">4.0%</span></label>
+
+      <div class="control" id="box-rate">
+        <div class="control-header">
+          <span>Ставка кредита (% год)</span>
+          <span><span class="val" id="rateVal">4.0%</span> <button class="lock-btn" data-lock="rate">🔓</button></span>
+        </div>
         <input type="range" id="rate" min="1" max="10" step="0.5" value="4" />
       </div>
-      <div class="control">
-        <label><span>Горизонт (лет)</span><span class="val" id="yearsVal">15 лет</span></label>
-        <input type="range" id="years" min="5" max="30" step="1" value="15" />
+
+      <div class="control" id="box-years">
+        <div class="control-header">
+          <span>Горизонт (лет)</span>
+          <span><span class="val" id="yearsVal">20 лет</span> <button class="lock-btn" data-lock="years">🔓</button></span>
+        </div>
+        <input type="range" id="years" min="5" max="30" step="1" value="20" />
+      </div>
+
+      <div class="control" id="box-targetLtv">
+        <div class="control-header">
+          <span>Целевой LTV (Долг / Портфель)</span>
+          <span><span class="val" id="targetLtvVal">15.0%</span> <button class="lock-btn" id="lockLtvBtn" onclick="toggleLtvLock()">🔓</button></span>
+        </div>
+        <input type="range" id="targetLtv" min="2" max="60" step="0.5" value="15" />
       </div>
     </div>
 
     <div class="grid-2">
-      <!-- График 1: Buy, Borrow, Die + % долга от портфеля -->
+      <!-- График 1 -->
       <div class="card">
         <h2>1. Весь доход в акции, жизнь в кредит</h2>
-        <p class="desc">Показаны суммы в евро и доля долга в портфеле (LTV, правая ось)</p>
+        <p class="desc">Портфель, чистый капитал и накопленный долг с процентами</p>
         <div class="kpis-4">
           <div class="kpi">
             <div class="k-label">Портфель в конце</div>
@@ -115,14 +201,14 @@
             <div class="k-val pos" id="bbdNetKpi">—</div>
           </div>
           <div class="kpi">
-            <div class="k-label">Долг / Портфель</div>
+            <div class="k-label">Итоговый LTV</div>
             <div class="k-val warn" id="bbdLtvKpi">—</div>
           </div>
         </div>
         <div class="chart-box"><canvas id="bbdChart"></canvas></div>
       </div>
 
-      <!-- График 2: Обычное инвестирование остатка -->
+      <!-- График 2 -->
       <div class="card">
         <h2>2. Жизнь на доход, в портфель — остаток</h2>
         <p class="desc">Без кредита: в портфель ежемесячно идет только (доход − траты)</p>
@@ -143,13 +229,68 @@
         <div class="chart-box"><canvas id="stdChart"></canvas></div>
       </div>
     </div>
+
+    <!-- График 3: Отдельный график только для % долга от капитала -->
+    <div class="card">
+      <h2>3. Динамика процента долга от капитала (LTV %)</h2>
+      <p class="desc">Показывает долю долга в портфеле по годам. При зафиксированном LTV двигайте траты или доход — зависимость пересчитается автоматически.</p>
+      <div class="chart-box-wide"><canvas id="ltvChart"></canvas></div>
+    </div>
   </div>
 
   <script>
     const fmtEur = (n) => "€" + Math.round(n).toLocaleString("ru-RU");
     const fmtPct = (n) => Number(n).toFixed(1) + "%";
 
-    const inputs = ["initial", "income", "spend", "growth", "rate", "years"].map((id) => document.getElementById(id));
+    const paramKeys = ["initial", "income", "spend", "growth", "rate", "years"];
+    const locked = { initial: false, income: false, spend: false, growth: false, rate: false, years: false };
+    let ltvLocked = false;
+    let lastSolvedBy = "spend_moved";
+
+    function applyLockUI() {
+      paramKeys.forEach((k) => {
+        const box = document.getElementById("box-" + k);
+        const input = document.getElementById(k);
+        const btn = document.querySelector(`.lock-btn[data-lock="${k}"]`);
+        box.classList.toggle("locked", locked[k]);
+        input.disabled = locked[k];
+        btn.textContent = locked[k] ? "🔒" : "🔓";
+      });
+
+      const ltvBox = document.getElementById("box-targetLtv");
+      const ltvBtn = document.getElementById("lockLtvBtn");
+      ltvBox.classList.toggle("locked", ltvLocked);
+      ltvBtn.textContent = ltvLocked ? "🔒" : "🔓";
+
+      const allMarketLocked = locked.growth && locked.rate && locked.years;
+      const marketBtn = document.getElementById("lockMarketBtn");
+      marketBtn.classList.toggle("active", allMarketLocked);
+      marketBtn.textContent = allMarketLocked
+        ? "🔓 Разблокировать ставку, рост и горизонт"
+        : "🔒 Зафиксировать ставку, рост и горизонт";
+    }
+
+    function toggleMarketPreset() {
+      const targetState = !(locked.growth && locked.rate && locked.years);
+      locked.growth = targetState;
+      locked.rate = targetState;
+      locked.years = targetState;
+      applyLockUI();
+    }
+
+    function toggleLtvLock() {
+      ltvLocked = !ltvLocked;
+      applyLockUI();
+      if (ltvLocked) refreshSimulation("spend_moved");
+    }
+
+    document.querySelectorAll(".lock-btn[data-lock]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const k = btn.getAttribute("data-lock");
+        locked[k] = !locked[k];
+        applyLockUI();
+      });
+    });
 
     function updateLabels() {
       document.getElementById("initialVal").textContent = fmtEur(document.getElementById("initial").value);
@@ -158,6 +299,7 @@
       document.getElementById("growthVal").textContent = Number(document.getElementById("growth").value).toFixed(1) + "%";
       document.getElementById("rateVal").textContent = Number(document.getElementById("rate").value).toFixed(1) + "%";
       document.getElementById("yearsVal").textContent = document.getElementById("years").value + " лет";
+      document.getElementById("targetLtvVal").textContent = Number(document.getElementById("targetLtv").value).toFixed(1) + "%";
     }
 
     const bbdChart = new Chart(document.getElementById("bbdChart"), {
@@ -165,72 +307,16 @@
       data: {
         labels: [],
         datasets: [
-          {
-            label: "Размер портфеля",
-            data: [],
-            borderColor: "#2563eb",
-            backgroundColor: "rgba(37,99,235,0.08)",
-            yAxisID: "yEur",
-            tension: 0.25
-          },
-          {
-            label: "Чистый капитал (активы − долг)",
-            data: [],
-            borderColor: "#16a34a",
-            backgroundColor: "rgba(22,163,74,0.12)",
-            fill: true,
-            yAxisID: "yEur",
-            tension: 0.25
-          },
-          {
-            label: "Накопленный долг",
-            data: [],
-            borderColor: "#dc2626",
-            borderDash: [5, 5],
-            yAxisID: "yEur",
-            tension: 0.25
-          },
-          {
-            label: "Долг от портфеля (%)",
-            data: [],
-            borderColor: "#d97706",
-            backgroundColor: "rgba(217,119,6,0.08)",
-            borderWidth: 2,
-            pointRadius: 3,
-            yAxisID: "yPct",
-            tension: 0.25
-          }
+          { label: "Размер портфеля", data: [], borderColor: "#2563eb", tension: 0.25 },
+          { label: "Чистый капитал", data: [], borderColor: "#16a34a", backgroundColor: "rgba(22,163,74,0.12)", fill: true, tension: 0.25 },
+          { label: "Накопленный долг", data: [], borderColor: "#dc2626", borderDash: [5, 5], tension: 0.25 }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
-        plugins: {
-          tooltip: {
-            callbacks: {
-              label: (ctx) => {
-                if (ctx.dataset.yAxisID === "yPct") {
-                  return `${ctx.dataset.label}: ${fmtPct(ctx.parsed.y)}`;
-                }
-                return `${ctx.dataset.label}: ${fmtEur(ctx.parsed.y)}`;
-              }
-            }
-          }
-        },
-        scales: {
-          yEur: {
-            type: "linear",
-            position: "left",
-            ticks: { callback: (v) => "€" + Math.round(v / 1000) + "k" }
-          },
-          yPct: {
-            type: "linear",
-            position: "right",
-            grid: { drawOnChartArea: false },
-            ticks: { callback: (v) => Number(v).toFixed(0) + "%" }
-          }
-        }
+        scales: { y: { ticks: { callback: (v) => "€" + Math.round(v / 1000) + "k" } } }
       }
     });
 
@@ -239,12 +325,29 @@
       data: {
         labels: [],
         datasets: [
+          { label: "Портфель (остаток)", data: [], borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,0.12)", fill: true, tension: 0.25 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        scales: { y: { ticks: { callback: (v) => "€" + Math.round(v / 1000) + "k" } } }
+      }
+    });
+
+    const ltvChart = new Chart(document.getElementById("ltvChart"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
           {
-            label: "Портфель (инвестируется только остаток)",
+            label: "Долг / Портфель (LTV %)",
             data: [],
-            borderColor: "#7c3aed",
-            backgroundColor: "rgba(124,58,237,0.12)",
+            borderColor: "#d97706",
+            backgroundColor: "rgba(217,119,6,0.14)",
             fill: true,
+            borderWidth: 2.5,
             tension: 0.25
           }
         ]
@@ -253,20 +356,23 @@
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
-        plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtEur(ctx.parsed.y)}` } } },
-        scales: { y: { ticks: { callback: (v) => "€" + Math.round(v / 1000) + "k" } } }
+        plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtPct(ctx.parsed.y)}` } } },
+        scales: { y: { ticks: { callback: (v) => Number(v).toFixed(0) + "%" } } }
       }
     });
 
-    async function refreshSimulation() {
-      updateLabels();
+    async function refreshSimulation(solvedBy = lastSolvedBy) {
+      lastSolvedBy = solvedBy;
       const payload = {
         initial: Number(document.getElementById("initial").value),
         income: Number(document.getElementById("income").value),
         spend: Number(document.getElementById("spend").value),
         growth: Number(document.getElementById("growth").value),
         rate: Number(document.getElementById("rate").value),
-        years: Number(document.getElementById("years").value)
+        years: Number(document.getElementById("years").value),
+        ltvLocked,
+        targetLtv: Number(document.getElementById("targetLtv").value),
+        solvedBy
       };
 
       const res = await fetch("/api/simulate", {
@@ -276,16 +382,32 @@
       });
       const data = await res.json();
 
+      if (data.resolvedParams) {
+        const clampedIncome = Math.min(30000, Math.max(1000, data.resolvedParams.income));
+        const clampedSpend = Math.min(15000, Math.max(500, data.resolvedParams.spend));
+        document.getElementById("income").value = clampedIncome;
+        document.getElementById("spend").value = clampedSpend;
+        if (!ltvLocked) {
+          const clampedLtv = Math.min(60, Math.max(2, data.resolvedParams.targetLtv));
+          document.getElementById("targetLtv").value = clampedLtv;
+        }
+      }
+
+      updateLabels();
+
       bbdChart.data.labels = data.labels;
       bbdChart.data.datasets[0].data = data.bbd.portfolio;
       bbdChart.data.datasets[1].data = data.bbd.netWorth;
       bbdChart.data.datasets[2].data = data.bbd.debt;
-      bbdChart.data.datasets[3].data = data.bbd.ltvPct;
       bbdChart.update();
 
       stdChart.data.labels = data.labels;
       stdChart.data.datasets[0].data = data.standard.portfolio;
       stdChart.update();
+
+      ltvChart.data.labels = data.labels;
+      ltvChart.data.datasets[0].data = data.bbd.ltvPct;
+      ltvChart.update();
 
       document.getElementById("bbdPortfolioKpi").textContent = fmtEur(data.bbd.finalPortfolio);
       document.getElementById("bbdDebtKpi").textContent = fmtEur(data.bbd.finalDebt);
@@ -295,13 +417,20 @@
       ltvEl.textContent = fmtPct(data.bbd.finalLtvPct);
       ltvEl.className = "k-val " + (data.bbd.finalLtvPct > 25 ? "neg" : data.bbd.finalLtvPct > 15 ? "warn" : "pos");
 
-      const surplus = Math.max(0, payload.income - payload.spend);
-      document.getElementById("stdSurplusKpi").textContent = fmtEur(surplus);
+      const currentIncome = Number(document.getElementById("income").value);
+      const currentSpend = Number(document.getElementById("spend").value);
+      document.getElementById("stdSurplusKpi").textContent = fmtEur(Math.max(0, currentIncome - currentSpend));
       document.getElementById("stdNetKpi").textContent = fmtEur(data.standard.finalPortfolio);
     }
 
-    inputs.forEach((el) => el.addEventListener("input", refreshSimulation));
-    refreshSimulation();
+    document.getElementById("spend").addEventListener("input", () => refreshSimulation("spend_moved"));
+    document.getElementById("income").addEventListener("input", () => refreshSimulation("income_moved"));
+    ["initial", "growth", "rate", "years", "targetLtv"].forEach((id) => {
+      document.getElementById(id).addEventListener("input", () => refreshSimulation("spend_moved"));
+    });
+
+    applyLockUI();
+    refreshSimulation("spend_moved");
   </script>
 </body>
 </html>
